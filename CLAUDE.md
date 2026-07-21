@@ -138,7 +138,10 @@ backend's `OSIRIS_KEY`), `GEMINI_API_KEY_*` (AI), `SDK_INGEST_KEY` (SDK ingest),
 `INTEL_URL` (intel service), and `OSIRIS_PORT` (published host port; the container always
 listens on 3000). The other keys in `.env.example` (`FIRMS_API_KEY`, `OPENSKY_*`,
 `N2YO_API_KEY`, `AIS_API_KEY`) are documented for future use / higher rate limits but are
-**not** currently consumed — don't assume a feed depends on them.
+**not** currently consumed — don't assume a feed depends on them. `OSIRIS_TELEGRAM_CHANNELS`
+is likewise documented in `README.md`/`DOCKER.md`/`.env.example` as a Telegram-channel
+override, but the current code ignores it too: `src/app/api/news/route.ts` uses a hardcoded
+`TELEGRAM_CHANNELS` list and reads no env var.
 
 Path alias `@/*` → `src/*` is configured in both `tsconfig.json` and `vitest.config.ts`.
 
