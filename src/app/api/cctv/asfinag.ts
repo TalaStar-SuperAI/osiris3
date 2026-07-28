@@ -57,9 +57,12 @@ function toAsfinagCamera(cam: AsfinagWebcam): CctvCamera | null {
   };
 }
 
+import { stealthFetch } from '@/lib/stealthFetch';
+
 async function fetchFreshAsfinagCameras(): Promise<CctvCamera[]> {
   try {
-    const res = await fetch(ASFINAG_WEBCAMS_URL, {
+    // 1. Fetch the manifest list for all active webcams
+    const res = await stealthFetch(ASFINAG_WEBCAMS_URL, {
       signal: AbortSignal.timeout(12000),
       headers: ASFINAG_HEADERS,
     });

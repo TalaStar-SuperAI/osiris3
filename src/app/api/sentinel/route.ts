@@ -27,7 +27,7 @@ export async function GET(req: Request) {
       const res = await fetch('https://earth-search.aws.element84.com/v1/search', { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify({
           collections: ['sentinel-1-grd'],
           bbox,

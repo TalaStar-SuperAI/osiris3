@@ -1,8 +1,9 @@
 import { CctvCamera } from "./types";
+import { stealthFetch } from '@/lib/stealthFetch';
 
 export async function fetchAustraliaCameras(): Promise<CctvCamera[]> {
     try {
-        const res = await fetch('https://www.livetraffic.com/datajson/all-feeds-web.json', { signal: AbortSignal.timeout(12000) });
+        const res = await stealthFetch('https://www.livetraffic.com/datajson/all-feeds-web.json', { signal: AbortSignal.timeout(12000) });
         if (!res.ok) return [];
         const data = await res.json();
         return (data || []).filter((event: { eventType: string; }) => event.eventType === 'liveCams').map((cam: { path: string; geometry: { coordinates: number[] }; properties: { title: string; region: string; href: string }; }) => {

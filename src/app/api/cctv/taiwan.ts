@@ -1,4 +1,6 @@
 import type { CctvCamera } from './types';
+import { stealthFetch } from '@/lib/stealthFetch';
+
 
 /**
  * Taiwan CCTV Cameras
@@ -51,7 +53,7 @@ const YOUTUBE_CAMERAS: CctvCamera[] = [
 // ── Taiwan Highway Bureau (THB) — Dynamic fetch of 2,000+ cameras ──
 async function fetchTHBCameras(): Promise<CctvCamera[]> {
   try {
-    const res = await fetch(
+    const res = await stealthFetch(
       'https://thbapp.thb.gov.tw/services/cctv/thb',
       { signal: AbortSignal.timeout(20000), headers: { 'Accept': 'application/json' } }
     );
@@ -86,7 +88,7 @@ async function fetchTHBCameras(): Promise<CctvCamera[]> {
           name: stake || c.id || 'THB Camera',
           city,
           country: 'Taiwan',
-          feed_url: `${c.html}/snapshot`,
+          feed_url: `/api/cctv/proxy?url=${encodeURIComponent(`${c.html}/snapshot`)}`,
           source: 'THB Highway Bureau',
         };
       });

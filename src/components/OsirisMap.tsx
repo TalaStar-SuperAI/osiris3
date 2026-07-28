@@ -18,6 +18,11 @@ interface OsirisMapProps {
   scanTargets?: any[];
   demoMode?: boolean;
   theme?: 'core' | 'ghost';
+  drawnPolygons?: Array<{ id: string; name: string; geojson: GeoJSON.Feature<GeoJSON.Polygon>; color: string }>;
+  arcgisLayers?: Array<{ id: string; title: string; geojson: any }>;
+  drawingMode?: boolean;
+  onDrawComplete?: (coords: number[][]) => void;
+  onMapCenter?: (coords: { lat: number; lng: number; bounds?: { west: number; south: number; east: number; north: number } }) => void;
 }
 
 function computeSolarTerminator(): [number, number][] {
@@ -42,12 +47,15 @@ function computeSolarTerminator(): [number, number][] {
 
 const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] };
 
-function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core' }: OsirisMapProps) {
+function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawingMode = false, onDrawComplete, onMapCenter }: OsirisMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const prevStyleRef = useRef(mapStyle);
+  const prevDrawnPolygonsRef = useRef<string[]>([]);
+  const prevArcgisLayersRef = useRef<string[]>([]);
+  const drawingCoordsRef = useRef<number[][]>([]);
 
   // Create aircraft icon on canvas (for WebGL symbol layer)
   const createIcon = useCallback((map: maplibregl.Map, id: string, color: string, size: number) => {
@@ -1739,6 +1747,194 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       console.warn('Style switch failed:', e);
     }
   }, [mapReady, mapStyle]);
+
+  // ── DRAWN POLYGONS ──
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const map = mapRef.current;
+    const currentPolygons = drawnPolygons || [];
+    const currentIds = currentPolygons.map(p => p.id);
+    
+    prevDrawnPolygonsRef.current.forEach(id => {
+      if (!currentIds.includes(id)) {
+        if (map.getLayer(`drawn-polygon-label-${id}`)) map.removeLayer(`drawn-polygon-label-${id}`);
+        if (map.getLayer(`drawn-polygon-line-${id}`)) map.removeLayer(`drawn-polygon-line-${id}`);
+        if (map.getLayer(`drawn-polygon-fill-${id}`)) map.removeLayer(`drawn-polygon-fill-${id}`);
+        if (map.getSource(`drawn-polygon-${id}-label`)) map.removeSource(`drawn-polygon-${id}-label`);
+        if (map.getSource(`drawn-polygon-${id}`)) map.removeSource(`drawn-polygon-${id}`);
+      }
+    });
+    prevDrawnPolygonsRef.current = currentIds;
+
+    currentPolygons.forEach(poly => {
+      const sourceId = `drawn-polygon-${poly.id}`;
+      const fillLayerId = `drawn-polygon-fill-${poly.id}`;
+      const lineLayerId = `drawn-polygon-line-${poly.id}`;
+      const labelLayerId = `drawn-polygon-label-${poly.id}`;
+
+      // Build a centroid point feature for the label
+      const ring = poly.geojson.geometry?.coordinates?.[0] || [];
+      const centroid = ring.length > 0 ? [
+        ring.reduce((s: number, c: number[]) => s + c[0], 0) / ring.length,
+        ring.reduce((s: number, c: number[]) => s + c[1], 0) / ring.length,
+      ] : [0, 0];
+      const labelFC = { type: 'FeatureCollection' as const, features: [{ type: 'Feature' as const, properties: { name: poly.name }, geometry: { type: 'Point' as const, coordinates: centroid } }] };
+
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, { type: 'geojson', data: poly.geojson });
+      } else {
+        (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData(poly.geojson);
+      }
+      if (!map.getSource(`${sourceId}-label`)) {
+        map.addSource(`${sourceId}-label`, { type: 'geojson', data: labelFC as any });
+      } else {
+        (map.getSource(`${sourceId}-label`) as maplibregl.GeoJSONSource).setData(labelFC as any);
+      }
+
+      if (!map.getLayer(fillLayerId)) {
+        map.addLayer({ id: fillLayerId, type: 'fill', source: sourceId, paint: { 'fill-color': poly.color, 'fill-opacity': 0.12 } });
+      }
+      if (!map.getLayer(lineLayerId)) {
+        map.addLayer({ id: lineLayerId, type: 'line', source: sourceId, paint: { 'line-color': poly.color, 'line-width': 2.5, 'line-dasharray': [6, 3] } });
+      }
+      if (!map.getLayer(labelLayerId)) {
+        map.addLayer({ id: labelLayerId, type: 'symbol', source: `${sourceId}-label`, layout: { 'text-field': ['get', 'name'], 'text-size': 11, 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': poly.color, 'text-halo-color': '#000000', 'text-halo-width': 2 } });
+      }
+    });
+  }, [mapReady, drawnPolygons]);
+
+  // ── ARCGIS LAYERS ──
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const map = mapRef.current;
+    const currentLayers = arcgisLayers || [];
+    const currentIds = currentLayers.map(l => l.id);
+
+    prevArcgisLayersRef.current.forEach(id => {
+      if (!currentIds.includes(id)) {
+        const sourceId = `arcgis-${id}`;
+        if (map.getLayer(`${sourceId}-fill`)) map.removeLayer(`${sourceId}-fill`);
+        if (map.getLayer(`${sourceId}-line`)) map.removeLayer(`${sourceId}-line`);
+        if (map.getLayer(`${sourceId}-circle`)) map.removeLayer(`${sourceId}-circle`);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+      }
+    });
+    prevArcgisLayersRef.current = currentIds;
+
+    currentLayers.forEach(layer => {
+      const sourceId = `arcgis-${layer.id}`;
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, { type: 'geojson', data: layer.geojson });
+        map.addLayer({ id: `${sourceId}-fill`, type: 'fill', source: sourceId, paint: { 'fill-color': '#D4AF37', 'fill-opacity': 0.12, 'fill-outline-color': '#D4AF37' } });
+        map.addLayer({ id: `${sourceId}-line`, type: 'line', source: sourceId, paint: { 'line-color': '#D4AF37', 'line-width': 2, 'line-opacity': 0.8 } });
+        map.addLayer({ id: `${sourceId}-circle`, type: 'circle', source: sourceId, filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-color': '#D4AF37', 'circle-radius': 5, 'circle-stroke-width': 1.5, 'circle-stroke-color': '#000', 'circle-opacity': 0.9 } });
+      } else {
+        (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData(layer.geojson);
+      }
+    });
+  }, [mapReady, arcgisLayers]);
+
+  // ── DRAWING MODE ──
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const map = mapRef.current;
+    
+    if (!drawingMode) {
+      map.doubleClickZoom.enable();
+      if (map.getLayer('draw-line-temp')) map.removeLayer('draw-line-temp');
+      if (map.getLayer('draw-points-temp')) map.removeLayer('draw-points-temp');
+      if (map.getSource('draw-temp-source')) map.removeSource('draw-temp-source');
+      drawingCoordsRef.current = [];
+      map.getCanvas().style.cursor = '';
+      return;
+    }
+
+    map.doubleClickZoom.disable();
+    map.getCanvas().style.cursor = 'crosshair';
+    drawingCoordsRef.current = [];
+
+    if (!map.getSource('draw-temp-source')) {
+      map.addSource('draw-temp-source', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'draw-line-temp', type: 'line', source: 'draw-temp-source', paint: { 'line-color': '#00E5FF', 'line-width': 2, 'line-dasharray': [4, 4] } });
+      map.addLayer({ id: 'draw-points-temp', type: 'circle', source: 'draw-temp-source', paint: { 'circle-color': '#00E5FF', 'circle-radius': 4, 'circle-stroke-width': 1, 'circle-stroke-color': '#000' } });
+    }
+
+    const updateTempGeoJSON = () => {
+      const coords = drawingCoordsRef.current;
+      const src = map.getSource('draw-temp-source') as maplibregl.GeoJSONSource;
+      if (!src) return;
+      if (coords.length === 0) {
+        src.setData({ type: 'FeatureCollection', features: [] });
+        return;
+      }
+      const features: any[] = [{ type: 'Feature', geometry: { type: 'MultiPoint', coordinates: coords }, properties: {} }];
+      if (coords.length > 1) {
+        features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [...coords, coords[0]] }, properties: {} });
+      }
+      src.setData({ type: 'FeatureCollection', features });
+    };
+
+    let dblClickGuard = false;
+
+    const handleClick = (e: any) => {
+      // Skip clicks that are part of a double-click
+      if (dblClickGuard) return;
+      drawingCoordsRef.current.push([e.lngLat.lng, e.lngLat.lat]);
+      updateTempGeoJSON();
+    };
+
+    const handleDblClick = (e: any) => {
+      e.preventDefault();
+      dblClickGuard = true;
+      setTimeout(() => { dblClickGuard = false; }, 300);
+
+      // Remove the duplicate point that the click handler added for the first click of the double-click
+      if (drawingCoordsRef.current.length > 0) drawingCoordsRef.current.pop();
+
+      const coords = [...drawingCoordsRef.current];
+      if (coords.length >= 3) {
+        // Don't close the ring here — page.tsx's onDrawComplete already adds coords[0]
+        onDrawComplete?.(coords);
+      }
+      drawingCoordsRef.current = [];
+      updateTempGeoJSON();
+
+      // Clean up temp layers
+      if (map.getLayer('draw-line-temp')) map.removeLayer('draw-line-temp');
+      if (map.getLayer('draw-points-temp')) map.removeLayer('draw-points-temp');
+      if (map.getSource('draw-temp-source')) map.removeSource('draw-temp-source');
+    };
+
+    map.on('click', handleClick);
+    map.on('dblclick', handleDblClick);
+
+    return () => {
+      map.off('click', handleClick);
+      map.off('dblclick', handleDblClick);
+    };
+  }, [mapReady, drawingMode, onDrawComplete]);
+
+  // ── MAP CENTER REPORTING ──
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const map = mapRef.current;
+
+    const reportCenter = () => {
+      const c = map.getCenter();
+      const b = map.getBounds();
+      onMapCenter?.({
+        lat: c.lat,
+        lng: c.lng,
+        bounds: b ? { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() } : undefined,
+      });
+    };
+
+    // Fire immediately so panels get initial coordinates
+    reportCenter();
+
+    map.on('moveend', reportCenter);
+    return () => { map.off('moveend', reportCenter); };
+  }, [mapReady, onMapCenter]);
 
   return <div ref={containerRef} className="absolute inset-0 w-full h-full" />;
 }
